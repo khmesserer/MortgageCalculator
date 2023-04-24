@@ -1,33 +1,89 @@
-import * as React from 'react';
-import { useState } from 'react';
-import { View, Text, Image, TextInput, Pressable, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
+import React, { useState, useEffect }from 'react';
+import { View, Text, Image, TextInput, Pressable, StyleSheet, ScrollView, Button } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as SplashScreen from 'expo-splash-screen';
+import * as SQLite from "expo-sqlite";
+import * as WebBrowser from 'expo-web-browser';
 
 SplashScreen.preventAutoHideAsync();
 setTimeout(SplashScreen.hideAsync, 2000);
 
-function HomeScreen({ navigation }) {
+const homeImage = require("./assets/images/house.png");
 
+// Source: https://stackoverflow.com/questions/149055/how-to-format-numbers-as-currency-strings
+const formatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+});
+
+function formatCurrency(value) {
+  return formatter.format(value);
+}
+
+function formatPercentage(value) {
+  return value.toString() + "%";
+}
+
+function openDatabase() {
+  if (Platform.OS === "web") {
+    return {
+      transaction: () => {
+        return {
+          executeSql: () => {},
+        };
+      },
+    };
+  }
+
+  const db = SQLite.openDatabase("db.db");
+  return db;
+}
+
+const db = openDatabase();
+
+function Results() {
+  const [results, setResults] = useState(null);
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      tx.executeSql(
+        `select * from calculations order by id desc;`,
+        null,
+        (_, { rows: { _array } }) => setResults(_array)
+      );
+    });
+  }, []);
+
+  if (results === null || results.length === 0) {
+    return null;
+  }
+
+  return (
+    <View> 
+      {results.map(({ loanAmount, result, calcDate }) => (
+        <Result loanAmount={loanAmount} result={result} calcDate={calcDate} />
+      ))}
+    </View>
+  )
+}
+
+function Result({loanAmount, result, calcDate}){
+  return (
+    <View style={styles.historyRow}>
+      <Text style={styles.historyDate}>{calcDate}</Text>
+      <Text style={styles.historyAmount}>{formatCurrency(loanAmount)}</Text>
+      <Text style={styles.historyResult}>{formatCurrency(result)}</Text>
+    </View>
+  );
+}
+
+function HomeScreen({ navigation }) {
   const [loanAmount, setLoanAmount] = useState(null);
   const [interestRate, setInterestRate] = useState(null);
   const [loanLength, setLoanLength] = useState(null);
-  const homeImage = require("./assets/images/house.png");
-
-  // Source: https://stackoverflow.com/questions/149055/how-to-format-numbers-as-currency-strings
-  const formatter = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  });
-
-  function formatCurrency(value) {
-    return formatter.format(value);
-  }
-
-  function formatPercentage(value) {
-    return value.toString() + "%";
-  }
+  const [forceUpdate, forceUpdateId] = useForceUpdate();
+  const result = null;
 
   function isValid() {
     if(isNaN(loanAmount)){
@@ -49,18 +105,45 @@ function HomeScreen({ navigation }) {
       alert("Loan Length must be greater than 0 and lesser than or equal to 30 years");
       return false;
     }
-    let i = interestRate/12;
+    let i = (interestRate*0.01)/12;
     let n = loanLength*12;
-    let result = loanAmount * (i * (1 + i) ** n) / ((1 + i) ** n - 1);
+    const result = loanAmount * (i * (1 + i) ** n) / ((1 + i) ** n - 1);
     let calcResult = {
       amount: formatCurrency(loanAmount),
       interestRate: formatPercentage(interestRate),
       length: loanLength + " Years",
       result: formatCurrency(result)
     };
-    navigation.navigate('Result', {result: calcResult});
+
+    try {
+      add(result);
+      navigation.navigate('Result', {result: calcResult});
+    } catch (error) {
+      alert('There was an error while saving the data');
+    }
     return true;
   }
+
+  useEffect(() => {
+    db.transaction((tx) => {
+      tx.executeSql(
+        "create table if not exists calculations (id integer primary key not null, loanAmount real, result real, calcDate real);"
+      );
+    });
+  }, []);
+
+  const add = (result) => {
+    db.transaction(
+      (tx) => {
+        tx.executeSql("insert into calculations (loanAmount, result, calcDate) values (?, ?, date('now'))", [loanAmount, result]);
+        tx.executeSql(`select id, loanAmount, result, date(calcDate) as calcDate from calculations order by id desc;`, [], (_, { rows }) =>
+          console.log(JSON.stringify(rows))
+        );
+      },
+      null,
+      forceUpdate
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -86,12 +169,20 @@ function HomeScreen({ navigation }) {
           <Text style={styles.buttonText}>Calculate</Text>
         </Pressable>
       </View>
+      <View style={styles.linkContainer}>
+        <Button
+          title="Shop for Homes on Zillow"
+          onPress={() => WebBrowser.openBrowserAsync('https://www.zillow.com')}
+          style={styles.button}
+        />
+      </View>
     </View>
   );
 }
 
 function ResultScreen({ route, navigation }) {
   const {result} = route.params;
+  const [forceUpdate, forceUpdateId] = useForceUpdate();
 
   return (
     <View style={styles.container}>
@@ -116,39 +207,11 @@ function ResultScreen({ route, navigation }) {
           <Text style={styles.historyResult}>Result</Text>
         </View>
         <ScrollView>
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
-          <Results />
+          <Results key={forceUpdateId}/>
         </ScrollView>
       </View>
     </View>
   );
-}
-
-function Results() {
-  const [results, setResults] = useState(null);
-
-  // Get results from DB
-
-  // Below is placeholder history
-  return (
-    <View style={styles.historyRow}> 
-      <Text style={styles.historyDate}>3/12/2023</Text>
-      <Text style={styles.historyAmount}>$100,000</Text>
-      <Text style={styles.historyResult}>$1,600</Text>
-    </View>
-  )
 }
 
 const Stack = createNativeStackNavigator();
@@ -181,6 +244,10 @@ export default function App() {
   );
 }
 
+function useForceUpdate() {
+  const [value, setValue] = useState(0);
+  return [() => setValue(value + 1), value];
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -195,6 +262,9 @@ const styles = StyleSheet.create({
   },
   elementContainer: {
     marginVertical: 10,
+  },
+  linkContainer: {
+    marginTop: 20
   },
   historyContainer: {
     borderTopColor: '#000',
